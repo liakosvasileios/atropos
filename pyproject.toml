@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atropos-slicer"
+version = "0.2.0"
+description = "Backward dynamic program slicing for Windows x86-64 reverse engineering"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Vasilis" }]
+keywords = [
+    "reverse-engineering", "program-slicing", "dynamic-analysis",
+    "frida", "stalker", "x86-64", "malware-analysis",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+]
+
+# Capstone is the only hard dependency: the effect model is built on its
+# decoder and access sets.  Everything else is the standard library, and the
+# typed-array storage in ddg.py / shadow.py deliberately uses `array` rather
+# than numpy so that a bundle can be sliced anywhere.
+dependencies = ["capstone>=5.0"]
+
+[project.optional-dependencies]
+# Only `atropos.capture` needs Frida.  Offline analysis of an existing bundle
+# — replay, slicing, output, the entire test suite — does not.
+capture = ["frida>=16.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+atropos = "atropos.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/example/atropos/tree/main/docs"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["error"]
