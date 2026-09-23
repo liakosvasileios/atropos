@@ -1,0 +1,57 @@
+# --- Python -----------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# --- Node (tools/build_theory_paper.js pulls in `docx`) ---------------
+node_modules/
+package-lock.json
+
+# --- Capture output ---------------------------------------------------
+# Trace bundles are large and target-specific; keep them out of the repo.
+*.atrace/
+
+# --- Docs: Markdown sources are tracked, rendered output is not -------
+# docs/*.md is the source of truth. The .docx/.pdf under docs/ are
+# generated from docs/theory.md by tools/build_theory_paper.js.
+*.docx
+*.pdf
+
+# --- Sample targets ---------------------------------------------------
+# examples/ holds third-party crackme binaries, their archives and IDA
+# databases. None of it is ours to redistribute and none of it is code.
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.7z
+*.rar
+# IDA database files
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# --- Build artifacts --------------------------------------------------
+*.obj
+*.ilk
+*.pdb
+
+# --- Editor / OS ------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+tools/
