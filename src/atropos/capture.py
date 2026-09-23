@@ -77,9 +77,33 @@ class Capture:
 
     def _inject(self) -> None:
         self._session.on("detached", self._on_detached)
-        self._script = self._session.create_script(self.agent_source)
+        self._script = self._create_script()
         self._script.on("message", self._on_message)
         self._script.load()
+
+    def _create_script(self):
+        """Create the agent script, pinned to the V8 runtime.
+
+        Frida 17 runs agents on QuickJS by default, and on QuickJS the memory
+        callout this agent puts on every memory-touching instruction wedges the
+        target: the stalked thread spins, the agent's JS runtime stops
+        answering RPC, and ``stop()`` never returns.  The same agent on V8
+        traces the same binary to completion in well under a second.  V8 ships
+        with frida on the desktop platforms; fall back to the default runtime
+        where it does not, so a build without it still runs.
+        """
+        try:
+            return self._session.create_script(self.agent_source, runtime="v8")
+        except (self._frida.NotSupportedError,
+                self._frida.InvalidArgumentError,
+                ValueError,
+                TypeError):
+            print(
+                "[atropos] V8 runtime unavailable; falling back to QuickJS, "
+                "where tracing a memory-heavy target is known to hang",
+                file=sys.stderr,
+            )
+            return self._session.create_script(self.agent_source)
 
     def _on_detached(self, reason, *_) -> None:
         self._detached = str(reason)
@@ -104,6 +128,12 @@ class Capture:
                     self._script.post({"type": "drain-ack"})
             elif kind == "drain-failed":
                 print(f"[atropos] drain failed: {payload.get('error')}",
+                      file=sys.stderr)
+            elif kind == "arm-failed":
+                # The target ran past its entry point untraced; whatever is
+                # drained at exit is an empty trace, not a short one.
+                print(f"[atropos] could not start tracing at the entry point "
+                      f"{payload.get('entry')}: {payload.get('error')}",
                       file=sys.stderr)
             elif kind == "thread":
                 print(f"[atropos] following thread {payload['tid']}")
