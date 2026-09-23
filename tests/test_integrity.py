@@ -75,6 +75,30 @@ def test_memory_access_count_mismatch_is_detected(tmp_path):
     assert any("memory access" in f.message for f in analysis.integrity.findings)
 
 
+def test_store_recorded_as_read_is_detected(tmp_path):
+    """A store whose MEM record carries only the READ bit must be an error.
+
+    Replay defines memory from the recorded direction, so the lost WRITE bit
+    silently drops the definition and a slice through the store ends in a
+    phantom "not written during the trace" input.  The capture agent did
+    exactly this for every explicit store while it read Frida's string-valued
+    operand access ('w') as Capstone's numeric flags.
+    """
+    writer = _writer(tmp_path)
+    block = writer.add_block(
+        0, 0x1400_1000, [assemble("mov [rbx], rax"), assemble("ret")]
+    )
+    writer.emit_block(block)
+    writer.emit_mem(0, 0x7FFF_1000, 8, 1)  # a store, recorded as a read
+    writer.emit_mem(1, 0x7FFF_0000, 8, 1)
+    writer.close()
+
+    analysis = analyse(TraceBundle(writer.path))
+    assert analysis.integrity.status is Status.SUSPECT
+    assert any("records the access as a read only" in f.message
+               for f in analysis.integrity.findings)
+
+
 def test_code_version_disagreement_is_detected(tmp_path):
     """A block captured under v0 replayed while the stream says v1 is an error.
 

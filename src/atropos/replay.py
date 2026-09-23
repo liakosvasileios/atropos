@@ -335,6 +335,22 @@ class Replay:
                     f"{self.bundle.rebase(insn.address)}: memory access size "
                     f"{size} differs from decoded operand size {slot.size}",
                 )
+            # The shadow is updated from the recorded direction, so a store
+            # recorded as a read silently drops a definition and every slice
+            # through it ends in a phantom "not written during the trace"
+            # input.  That is a broken trace, not an imprecision.
+            if slot.writes and not rw & RW_WRITE:
+                self.integrity.error(
+                    seq,
+                    f"{self.bundle.rebase(insn.address)}: instruction writes "
+                    "memory but the trace records the access as a read only",
+                )
+            elif rw & RW_WRITE and not slot.writes:
+                self.integrity.note(
+                    seq,
+                    f"{self.bundle.rebase(insn.address)}: trace records a memory "
+                    "write the decoded instruction does not make",
+                )
             if rw & RW_READ:
                 self._emit_mem_reads(ea, size, KIND_VALUE)
 
