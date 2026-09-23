@@ -249,7 +249,7 @@ guess how much of the answer to believe.
 ## Correctness
 
 ```bash
-pytest          # 151 tests, no target process required
+pytest          # 153 tests, no target process required
 ```
 
 Three layers:
@@ -337,3 +337,8 @@ src/atropos/
 
 Design v0.2, milestones M0–M5 implemented and tested; M6 (a real target end to end) and M7 (the inline
 EA emitter) are next. See §13 of the design document for the plan and the validation gate on each step.
+
+Capture now works end to end on the two minimal targets in `examples/tiny/`: every run is clean,
+deterministic and slices the same in both. `examples/tiny/README.md` lists the expected results, and
+`docs/reference.md` §16.3 describes the capture defects fixed to get there. A real crackme end to end is
+still open.

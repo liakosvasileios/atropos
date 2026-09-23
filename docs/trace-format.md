@@ -141,6 +141,12 @@ memory-touching instructions get a record of their own (design v0.2 §4.4).
 running value starts at 0. `rw` is a bitmask: `1` read, `2` write, `3` both (a read-modify-write
 operand such as `add [mem], rax` is **one** record with `rw = 3`, not two records).
 
+Replay applies the shadow update from `rw`, not from its own decoding, so the host cross-checks it: a
+record without the write bit for an operand the effect model says is written is an integrity *error*
+(the definition would be lost), and a write bit the model does not expect is a note. Producers must
+derive `rw` from the operand's access, not default it; Frida reports that access as the string `'r'`,
+`'w'` or `'rw'`, not as Capstone's numeric flags.
+
 `insn_index` is the instruction's position within the current block. It is redundant — the reader
 already knows which instruction it is up to — and it is emitted anyway, as one varint, because it makes
 desynchronisation *detectable*. Without it a dropped record silently reattributes every subsequent

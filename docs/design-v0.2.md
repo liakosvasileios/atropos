@@ -328,6 +328,9 @@ The v0.2 default is **trust-with-invalidation**:
 - Detect writes to executable pages and invalidate precisely:
   1. Hook `VirtualProtect` / `NtProtectVirtualMemory` and `VirtualAlloc` / `NtAllocateVirtualMemory`;
      record every region that becomes writable-and-later-executable (W→X transitions) or `RWX`.
+     *Implementation note (2026-09-23):* only the protection pair is hooked. Stalker allocates its
+     code slabs through the allocation pair, and a hook there deadlocks it. A fresh allocation cannot
+     overlap instrumented code, so step 3 never depended on it (reference §16.3, C4).
   2. For `RWX` regions — where a write can happen with no API call to observe — mark the pages
      `PAGE_GUARD` behind the target's back and take the fault, or (cheaper, and the default) hash
      executed blocks on entry at a sampled rate and invalidate on mismatch.

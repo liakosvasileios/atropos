@@ -83,7 +83,7 @@ Verify the installation:
 ```bash
 atropos --version            # atropos 0.2.0
 atropos demo                 # builds and slices a fixture; needs no target
-pytest                       # 152 tests, ~1.5 s
+pytest                       # 153 tests, ~1.5 s
 ```
 
 ---
@@ -416,7 +416,7 @@ python -m atropos.capture (--spawn PROGRAM | --attach PID_OR_NAME) --out DIR
 
 | Option | Effect |
 |--------|--------|
-| `--spawn PROGRAM` | Spawn suspended, inject the agent, resume. Stalking is armed at the image entry point (read from the PE header), so the ntdll/kernel32 thread-start handoff runs native. |
+| `--spawn PROGRAM` | Spawn suspended, inject the agent, resume. Stalking is armed at the image entry point (read from the PE header), so the ntdll/kernel32 thread-start handoff runs native: the agent writes `jmp $` over the entry point, and once the main thread is parked there the agent's JS thread suspends it, restores the bytes, follows it by thread id and resumes it. The first `BLOCK` is therefore the entry block at its real address (`image+entry`). |
 | `--attach PID_OR_NAME` | Attach to a running process. **`--thread TID` is required**: Frida's own threads are indistinguishable from the target's. |
 | `--arg A` | Command-line argument for the spawned program (repeatable). |
 | `--mark-export MOD:EXPORT=ID` | Hook `MOD!EXPORT`; on every call emit `MARK ID` and print the first four arguments. Enables `--at mark=ID`. |
@@ -428,15 +428,33 @@ python -m atropos.capture (--spawn PROGRAM | --attach PID_OR_NAME) --out DIR
 Lifecycle: `configure()` → `mark_export()`… → `start()` → wait → `stop()` (drains to disk). If the
 target exits first, the agent's `ExitProcess`/`RtlExitUserProcess` hook drains and blocks for a
 `drain-ack` from the host, so one-shot CLI targets still leave a bundle. Host-side messages
-`[atropos] following thread`, `code rewritten at … -> version N`, `mark N at EXPORT` narrate progress.
+`[atropos] following thread`, `code rewritten at … -> version N`, `mark N at EXPORT` narrate progress;
+`could not start tracing at the entry point …` means the main thread never reached the parked entry
+point within 30 s, so the bundle will be empty.
 
 What the agent records per executed block: one `BLOCK`; per instruction with memory operands a `MEM`
-per access in *canonical order* (explicit operands in Capstone order, then the implicit stack access);
-`REP` before a `rep`-prefixed string op (RCX, RSI, RDI, DF); `SHIFTCNT` before a `shl/shr/… r, cl`
-(CL & 0x3F); `SUMMARY` on leaving a hooked API; `MARK`; `VERSION` when a `VirtualProtect`/
-`VirtualAlloc`/`NtProtectVirtualMemory`/`NtAllocateVirtualMemory` call touches a page holding
-already-instrumented code (then every known block is invalidated so it re-registers under the new
-version); `THREAD` when a thread starts being followed.
+per access in *canonical order* (explicit operands in Capstone order, then the implicit stack access),
+with `rw` taken from Frida's operand `access` string (`'r'`, `'w'`, `'rw'`); `REP` before a
+`rep`-prefixed string op (RCX, RSI, RDI, DF); `SHIFTCNT` before a `shl/shr/… r, cl` (CL & 0x3F);
+`SUMMARY` on leaving a hooked API; `MARK`; `VERSION` when a `VirtualProtect`/`NtProtectVirtualMemory`
+call touches a page holding already-instrumented code (then every known block is invalidated so it
+re-registers under the new version); `THREAD` when a thread starts being followed.
+
+What the agent deliberately does **not** record:
+
+- **Other threads' API calls.** `SUMMARY` and `MARK` are emitted only for calls made on a followed
+  thread. Hooks fire on every thread, and the loader's worker pool and Frida's own threads call
+  `RtlMoveMemory` constantly; interleaved into the single trace stream, their records split the
+  followed thread's blocks and made most captures fail integrity.
+- **Frida's own code.** When the followed thread enters a hooked function, Stalker follows it through
+  Interceptor's trampolines and `frida-agent.dll`. Neither appears in the module map, so both used to be
+  treated as unpacked code and instrumented, which put JS callouts on the code that was dispatching into
+  the JS runtime. Pages that `Cloak.hasRangeContaining()` reports as Frida's are now kept verbatim.
+- **Memory allocation.** `VirtualAlloc`/`NtAllocateVirtualMemory` are never hooked, neither for
+  code-rewrite detection nor as summary id 10. Stalker allocates its code slabs through them while
+  holding its own locks, and any hook there, even an empty native one, deadlocks the target. A fresh
+  allocation cannot overlap instrumented code, so no rewrite detection is lost. `wx_regions` therefore
+  lists protection changes only.
 
 Agent limitations in v0.2: `DF` in `REP` records is always 0 (Frida does not surface it on x64);
 sampled block re-hashing (`hashSampleRate`) is a hook point, not implemented; `ABORT` is not emitted.
@@ -627,7 +645,7 @@ src/atropos/
     testkit.py               assembler + MiniVM + bundle builder
     oracle.py                independent second slicer + fuzzer
     examples.py              the three demo workflows
-tests/                       152 pytest tests
+tests/                       153 pytest tests
 docs/                        design, review, format, semantics, control, summaries, this file, theory
 ```
 
@@ -768,15 +786,15 @@ Described in §8. `listing._fold` collapses addresses with ≥ `fold_threshold` 
 `Capture` wraps a Frida session: `spawn`/`attach` → `_inject` → `configure` → `mark_export` →
 `start` → `stop` (tolerating a target that already exited and drained). See §10 for the agent's
 behaviour; the agent mirrors `format.py` in `ByteBuffer` and `SummaryTable.default()` ids in
-`SUMMARIES` (13 hooks in the agent vs 24 host-side entries; the host ignores nothing, the agent simply
-hooks a subset).
+`SUMMARIES` (12 hooks in the agent vs 24 host-side entries; the host ignores nothing, the agent simply
+hooks a subset, and id 10 `VirtualAlloc` is reserved but never hooked, see §10).
 
 ---
 
 ## 14. Testing infrastructure
 
 ```bash
-pytest            # 152 tests in ~1.5 s, no Frida, no target
+pytest            # 153 tests in ~1.5 s, no Frida, no target
 pytest -k oracle  # the differential layer only
 ```
 
@@ -786,7 +804,7 @@ pytest -k oracle  # the differential layer only
 | `test_effects.py` | every override rule, asserting on lane ranges directly |
 | `test_replay.py` | byte-lane worked example, multi-def reads, partial overwrite, decode-loop isolation, address/value separation, idioms, `lea`, zero-count shifts, `rep` bulk/zero, RMW |
 | `test_control.py` | ipdom on diamond/chain/closed loop, loop-body guards, no leak across `ret`, flattening detection and `--force-cd` |
-| `test_integrity.py` | clean trace, discontinuity, MEM-count mismatch, version disagreement, unknown block, abort, finding cap |
+| `test_integrity.py` | clean trace, discontinuity, MEM-count mismatch, store recorded as a read, version disagreement, unknown block, abort, finding cap |
 | `test_oracle.py` | differential agreement on chain/idiom/sub-register/zero-shift/`lea` and a seeded fuzz loop |
 | `test_slicer.py` | criterion parsing, address points, module rebasing, backward/forward/chop, DAG property, all four output formats, the three workflows, bridge summary exclusion |
 
@@ -880,12 +898,39 @@ repository, and a 210 000-node synthetic scale run).
 | 7 | Cosmetic | `integrity.py` `check_continuity` | The message uses `prev_block.end_address`, which can equal `next.start_address`, giving "target.exe+0xc does not reach target.exe+0xc" for an unconditional jump that fell through. Reporting the terminator's address would be clearer. |
 | 8 | Low | `output/bridge.py` `IDA_SCRIPT` | Calls `idaapi.get_imagebase()` without `import idaapi`; works only because IDAPython pre-imports `idaapi` into the script namespace. |
 | 9 | Env | `capture.py` | On Python 3.10 with current Frida, `import frida` fails on `typing.NotRequired`; the wrapped message says "pip install frida", which misleads. Requires 3.11+ (or an older Frida). |
-| 10 | Doc drift | `README.md` | Says 151 tests; there are 152. |
+| 10 | Doc drift | `README.md` | Said 151 tests; there were 152. Resolved 2026-09-23 (now 153 everywhere). |
 | 11 | Status | real bundles in repo | `run/crack/crack2/crack3.atrace` contain 12 instructions in `ntdll.dll` plus 88 `RtlMoveMemory` summaries — the excluded-module and entry-point hooking path did not yet trace the target image (milestone M6 is marked as next in the README). `pwdtoytest2.atrace` has zero blocks and 1 011 summary nodes. Both load and slice without error. |
-| 12 | Agent gap | `atropos-agent.js` | `REP.df` is always 0; `maybeRehash` is a stub; no `ABORT` emission; agent hooks 13 of the 24 host summaries. All are commented in the source. |
+| 12 | Agent gap | `atropos-agent.js` | `REP.df` is always 0; `maybeRehash` is a stub; no `ABORT` emission; agent hooks 12 of the 24 host summaries (id 10 is deliberately unhooked, §10). All are commented in the source. |
 
 Items 1–3 are the ones worth fixing before the next real-target capture; item 1 changes slice results
 through any hooked memory-moving or I/O API.
+
+### 16.3 Capture defects found and fixed (2026-09-23)
+
+Found by capturing `examples/tiny/tiny_nocrt.exe` and `tiny_crt.exe` repeatedly (Frida 17.17.0,
+Python 3.14, Windows 11), recording each target's real exit code and replaying every bundle. Before the
+fixes, 9 of 50 captures were clean. After them, 60 of 60 were clean on V8 and 20 of 20 on QuickJS, with
+identical traces on every run (388 instructions for `tiny_nocrt`, 650 for `tiny_crt`).
+
+| # | Symptom | Cause | Fix |
+|---|---------|-------|-----|
+| C1 | About 72% of bundles fail integrity with "model expects 1 memory access(es), trace has 0" at a different instruction each run | Summary and mark hooks fire on every thread. Other threads' `RtlMoveMemory` calls land between a `BLOCK` and its `MEM` records, and replay flushes the block at the `SUMMARY` | Record only calls made on a followed thread (`recording()` in the agent) |
+| C2 | Every trace carries about 376 instructions of Frida itself; about 10% of runs crash (`0x80000003`, `0xC0000005`) and leave no bundle | `frida-agent.dll` is cloaked from `enumerateModules()`, so its code and Interceptor's trampolines counted as "anonymous" and were instrumented | Keep pages that `Cloak.hasRangeContaining()` reports as Frida's verbatim, checked once per page |
+| C3 | Target hangs; the entry block (`start`'s prologue) is recorded at a trampoline address instead of `image+entry` | `Stalker.follow()` was called from inside an Interceptor hook on the entry point, so the thread was stalked while still inside gumjs, V8 and the trampoline | Park the thread with `jmp $` at the entry, then follow it by id from the JS thread (`armAtEntry()`) |
+| C4 | Target stuck forever mid-exit, and the host blocks in `stop()` | Any Interceptor hook on `VirtualAlloc`/`NtAllocateVirtualMemory`, even an empty native one, deadlocks Stalker, which allocates code slabs through them | Hook the protection APIs only; summary id 10 is reserved but unhooked |
+| C5 | Slices through a store end in "memory not written during the trace" | Frida reports operand access as a string (`'w'`), and the agent read it as Capstone's numeric flags, so every explicit store was recorded as a read | Parse the string (`accessDirection()`) |
+| C6 | C5 passed integrity checking | Replay checked the size of each `MEM` record against the effect model but not its direction | A store recorded without the WRITE bit is now an integrity error (`test_store_recorded_as_read_is_detected`) |
+
+Consequences for existing bundles: anything captured before these fixes (`examples/tiny/ok_*.atrace`,
+the `*.atrace` bundles in the repository root) has C1, C2 and C5 baked in, and now reports as suspect
+under C6. Re-capture it.
+
+The `QuickJS` hang that motivated pinning the agent to V8 in `capture.py` was C2–C4: with the fixes in
+place, QuickJS captures both targets cleanly too. V8 is still requested and is harmless.
+
+Not fixed: `Capture.stop()` has no timeout, so a target that wedges for any other reason still blocks
+the host. `VirtualFree` (summary id 11) is a deallocation hook and could deadlock Stalker the way C4
+does; it was not observed, but neither tiny target frees memory while traced.
 
 ---
 
@@ -901,4 +946,8 @@ through any hooked memory-moving or I/O API.
 | `capture needs the frida package` although it is installed | Python 3.10 + new Frida (§2). |
 | `no target thread to follow` on `--attach` | Pass `--thread TID`. |
 | `code rewritten at 0xffffffffffffffff` | Old agent bug with Nt* argument positions; fixed in the current agent (reads out-parameters on return). |
+| `model expects N memory access(es), trace has 0` at a different instruction each capture | Bundle recorded before fix C1 (§16.3): another thread's `SUMMARY` split a block. Re-capture. |
+| `instruction writes memory but the trace records the access as a read only` | Bundle recorded before fix C5 (§16.3); every store in it is lost to replay. Re-capture. |
+| Trace starts in anonymous addresses or `0x7ffd…` code that is in no module | Bundle recorded before fixes C2/C3 (§16.3): that is Frida's own code. Re-capture. |
+| Target never exits; `taskkill` says "There is no running instance" but the process is still listed | The process is stuck mid-termination with one spinning thread (the C4 deadlock, or a new one). Terminate that thread, e.g. `TerminateThread` via Process Explorer; then report which hooks were active. |
 | `addr=` point "never executed" | Wrong module base (ASLR): use `module+0xRVA`, not an absolute address from a different run. |

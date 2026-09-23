@@ -69,7 +69,7 @@ Three facts to hold onto:
 
 ```bash
 pip install -e .[dev]            # analysis + tests; capstone is the only hard dependency
-pytest                           # 152 tests, ~1.5 s, no target needed
+pytest                           # 153 tests, ~1.5 s, no target needed
 atropos demo                     # if this prints a slice, the offline pipeline works
 ```
 
@@ -205,7 +205,7 @@ you know are not the answer (a rendering engine, a JSON parser). Fewer traced in
 capture and replay, at the cost of "live-in" leaves where those DLLs wrote memory.
 
 Use `--paranoid` **only** when you have evidence the target rewrites code without going through
-`VirtualProtect`/`VirtualAlloc` (an RWX section it writes directly). It re-instruments every block on
+`VirtualProtect`/`NtProtectVirtualMemory` (an RWX section it writes directly). It re-instruments every block on
 every execution and is 10–100× slower on loops. Otherwise trust the default: rewrites through the
 protection APIs are detected and versioned automatically.
 
@@ -398,8 +398,9 @@ filled the buffer.
 **Setup.** A packer decodes a region and jumps into it. You want the decode loop and the source
 bytes, and you do not want the anti-debug noise around it.
 
-**Record.** `VirtualProtect` and `VirtualAlloc` are hooked automatically; each rewrite of instrumented
-code bumps the version. Mark `VirtualProtect` so you have an anchor at the moment the region becomes
+**Record.** `VirtualProtect` and `NtProtectVirtualMemory` are hooked automatically; each rewrite of
+instrumented code bumps the version. (The allocation APIs are not hooked: a hook there deadlocks
+Stalker, and a fresh allocation cannot hold instrumented code anyway.) Mark `VirtualProtect` so you have an anchor at the moment the region becomes
 executable:
 
 ```bash
@@ -408,7 +409,7 @@ python -m atropos.capture --spawn packed.exe --out run.atrace \
 ```
 
 **Find the region.** `atropos info` shows `code version changes` and the `wx_regions` list in the
-capture metadata (`base`, `size` of every region that transitioned). Pick a byte inside it —
+capture metadata (`base`, `size` of every protection change the target made). Pick a byte inside it —
 preferably the *first* byte of the new entry point, since that is the one you know was executed.
 
 **Slice one byte, `value` mode:**
@@ -764,8 +765,11 @@ question or the trace.
 8. **Is the code versioned?** `[vN]` tags: the instruction *as it was then*. Compare with the
    database's bytes before assuming a decoder error.
 9. **Is the trace actually of the target?** The real bundles shipped in this repository are 12
-   instructions of `ntdll` — the entry-point hook did not reach the image. `atropos info` →
-   `instructions` and the module of the first few `seq`s tell you immediately.
+   instructions of `ntdll`: the old entry-point hook did not reach the image. `atropos info` →
+   `instructions` and the module of the first few `seq`s tell you immediately. A current capture
+   starts with `THREAD` followed by the image's own entry block (`image+entry`). If the first blocks
+   are at anonymous or `0x7ffd…` addresses, or the bundle reports stores recorded as reads, it was made
+   by an agent from before 2026-09-23 (reference §16.3). Re-capture it.
 10. **Still wrong?** Build a minimal fixture with `atropos.testkit` reproducing the instruction pattern
     and run `oracle.differential_check` on it; if the two implementations disagree, you have found a
     modelling bug and the fixture is the test case.

@@ -41,6 +41,11 @@ serial number" is exactly what the crypto workflow is asking.
 `VirtualAlloc`, `HeapAlloc`. Defines a fresh region, so bytes read out of it before anything writes them
 are attributable to the allocation rather than to unknown initial state.
 
+The capture agent does **not** hook `VirtualAlloc` (id 10 stays reserved in the table). Stalker maps its
+own code slabs through `VirtualAlloc`/`NtAllocateVirtualMemory` while holding internal locks, and any
+Interceptor hook there deadlocks the traced thread (reference §16.3, C4). Until allocation is observed
+some other way, bytes read from a fresh `VirtualAlloc` region show as unwritten initial state.
+
 ### `free`
 `VirtualFree`. Releases shadow pages so peak memory tracks the live working set rather than everything
 the process ever touched. Only fully covered pages are released — a page straddling the edge of a freed
